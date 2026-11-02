@@ -10,6 +10,7 @@ export interface DeploymentSettings {
   databaseName: string;
   databaseId?: string;
   customDomain?: string;
+  zoneId?: string;
   previewDomain?: string;
   deployPreview?: boolean;
   authProvider: 'cloudflare' | 'github';
@@ -63,6 +64,11 @@ export function readDeploymentSettings(
   if (customDomain?.toLowerCase().endsWith('.workers.dev')) {
     throw new Error('CUSTOM_DOMAIN 不能填写 workers.dev 地址；使用 Worker 自带域名时请删除或留空该配置。');
   }
+  // 显式提供 Zone ID 时，Wrangler 不再按域名查询 Zone，因而无需 Zone Read 权限。
+  const zoneId = env.CLOUDFLARE_ZONE_ID?.trim() || undefined;
+  if (zoneId && !/^[a-f0-9]{32}$/i.test(zoneId)) {
+    throw new Error('CLOUDFLARE_ZONE_ID 必须是 32 位十六进制 Zone ID。');
+  }
   const previewDomain = deployPreview ? env.PREVIEW_DOMAIN?.trim() : undefined;
   if (deployPreview && previewDomain && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(previewDomain)) {
     throw new Error('PREVIEW_DOMAIN 只能填写完整域名，不能包含协议、路径或通配符。');
@@ -111,7 +117,7 @@ export function readDeploymentSettings(
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, previewDomain, deployPreview, authProvider, githubClientId, githubAdmin, githubAdminId,
+    databaseName, databaseId, customDomain, zoneId, previewDomain, deployPreview, authProvider, githubClientId, githubAdmin, githubAdminId,
     adminEmail, identityProviderIds, secrets,
   };
 }
@@ -139,7 +145,13 @@ export function createDeploymentConfig(
         ...(runtime?.githubAdminId ? { GH_ADMIN_ID: runtime.githubAdminId } : {}),
       } : {}),
     },
-    ...(settings.customDomain ? { routes: [{ pattern: settings.customDomain, custom_domain: true }] } : {}),
+    ...(settings.customDomain ? {
+      routes: [{
+        pattern: settings.customDomain,
+        custom_domain: true,
+        ...(settings.zoneId ? { zone_id: settings.zoneId } : {}),
+      }],
+    } : {}),
     d1_databases: (template.d1_databases as TomlTable[]).map((binding) => binding.binding === 'DB'
       ? { ...binding, database_name: database.name, database_id: database.uuid }
       : binding),
