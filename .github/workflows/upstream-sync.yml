@@ -1,0 +1,64 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  OFFICIAL_REPOSITORY: aozorae/EdgeSSH
+  OFFICIAL_BRANCH: main
+
+jobs:
+  sync:
+    name: Merge official repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      updated: ${{ steps.merge.outputs.updated }}
+      target_sha: ${{ steps.merge.outputs.target_sha }}
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream and push
+        id: merge
+        shell: bash
+        run: |
+          git remote add official "https://github.com/${OFFICIAL_REPOSITORY}.git"
+          git fetch --no-tags official "${OFFICIAL_BRANCH}"
+          upstream_sha="$(git rev-parse "refs/remotes/official/${OFFICIAL_BRANCH}")"
+
+          if git merge-base --is-ancestor "${upstream_sha}" HEAD; then
+            echo "updated=false" >> "${GITHUB_OUTPUT}"
+            echo "No upstream updates." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-edit "${upstream_sha}"
+          git push origin HEAD:main
+
+          echo "updated=true" >> "${GITHUB_OUTPUT}"
+          echo "target_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "Merged upstream ${upstream_sha} into main." >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    name: Deploy merged commit
+    needs: sync
+    if: needs.sync.outputs.updated == 'true'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      deployment_ref: ${{ needs.sync.outputs.target_sha }}
+    secrets: inherit
