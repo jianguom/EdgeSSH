@@ -55,6 +55,8 @@ jobs:
       CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
       # 显式指定 Zone ID 可避免 Wrangler 查询 Zone，从而不需要 Zone Read 权限。
       CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      # 域名已通过账户级 API 绑定时可跳过路由维护，避免要求 Zone 级写权限。
+      SKIP_CUSTOM_DOMAIN_ROUTES: ${{ vars.SKIP_CUSTOM_DOMAIN_ROUTES }}
       PREVIEW_DOMAIN: ${{ vars.PREVIEW_DOMAIN }}
       DEPLOY_PREVIEW_WORKER: ${{ inputs.deploy_preview && 'true' || 'false' }}
     steps:

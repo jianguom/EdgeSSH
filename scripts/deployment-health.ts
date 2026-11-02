@@ -17,6 +17,12 @@ export async function verifyGithubDeployment(
     }
   }
   const login = await probe('/auth/login');
+  // 正式入口启用了 Cloudflare 托管挑战时，自动化请求会收到 403 挑战页；
+  // 这属于边缘防护而非 Worker 故障，跳过自动验收并提示人工确认。
+  if (login.status === 403 && login.headers.get('cf-mitigated') === 'challenge') {
+    console.warn('正式入口启用了 Cloudflare 托管挑战，已跳过自动登录验收；请在浏览器中确认登录可用。');
+    return;
+  }
   const location = login.headers.get('Location');
   const target = location && URL.canParse(location, origin) ? new URL(location, origin) : null;
   if (login.status !== 302 || target?.origin !== 'https://github.com'

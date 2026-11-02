@@ -11,6 +11,7 @@ export interface DeploymentSettings {
   databaseId?: string;
   customDomain?: string;
   zoneId?: string;
+  manageRoutes?: boolean;
   previewDomain?: string;
   deployPreview?: boolean;
   authProvider: 'cloudflare' | 'github';
@@ -69,6 +70,12 @@ export function readDeploymentSettings(
   if (zoneId && !/^[a-f0-9]{32}$/i.test(zoneId)) {
     throw new Error('CLOUDFLARE_ZONE_ID 必须是 32 位十六进制 Zone ID。');
   }
+  // 自定义域名已由账户级 API 绑定时，可跳过 Wrangler 的路由维护，避免要求 Zone 级写权限。
+  const skipRoutesValue = env.SKIP_CUSTOM_DOMAIN_ROUTES?.trim().toLowerCase() || 'false';
+  if (skipRoutesValue !== 'true' && skipRoutesValue !== 'false') {
+    throw new Error('SKIP_CUSTOM_DOMAIN_ROUTES 只能是 true 或 false。');
+  }
+  const manageRoutes = skipRoutesValue !== 'true';
   const previewDomain = deployPreview ? env.PREVIEW_DOMAIN?.trim() : undefined;
   if (deployPreview && previewDomain && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(previewDomain)) {
     throw new Error('PREVIEW_DOMAIN 只能填写完整域名，不能包含协议、路径或通配符。');
@@ -117,7 +124,7 @@ export function readDeploymentSettings(
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, zoneId, previewDomain, deployPreview, authProvider, githubClientId, githubAdmin, githubAdminId,
+    databaseName, databaseId, customDomain, zoneId, manageRoutes, previewDomain, deployPreview, authProvider, githubClientId, githubAdmin, githubAdminId,
     adminEmail, identityProviderIds, secrets,
   };
 }
@@ -145,7 +152,7 @@ export function createDeploymentConfig(
         ...(runtime?.githubAdminId ? { GH_ADMIN_ID: runtime.githubAdminId } : {}),
       } : {}),
     },
-    ...(settings.customDomain ? {
+    ...(settings.customDomain && settings.manageRoutes !== false ? {
       routes: [{
         pattern: settings.customDomain,
         custom_domain: true,
