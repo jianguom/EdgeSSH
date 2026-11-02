@@ -36,11 +36,14 @@ export interface SSHConnectionConfig {
   password?: string;
   privateKey?: string;
   keychainId?: string;
+  keyPassphrase?: string;
   cols: number;
   rows: number;
   term: string;
   expectedFingerprint?: string;
-  mode?: 'forward';
+  mode?: 'forward' | 'exec' | 'sftp';
+  command?: string;
+  timeoutMs?: number;
 }
 
 export interface TerminalSize {
@@ -129,9 +132,12 @@ export function parseConnectMessage(value: unknown): SSHConnectionConfig {
   if (typeof raw.port !== 'number' || !Number.isInteger(raw.port) || raw.port < 1 || raw.port > 65535) throw new Error('Invalid SSH port');
   if (typeof raw.username !== 'string' || raw.username.length < 1 || raw.username.length > 128 || /[\0\r\n]/.test(raw.username)) throw new Error('Invalid SSH username');
   if (raw.authMethod !== 'password' && raw.authMethod !== 'publickey') throw new Error('Invalid authentication method');
-  const allowedFields = new Set(['type', 'host', 'port', 'username', 'authMethod', 'password', 'privateKey', 'keychainId', 'cols', 'rows', 'term', 'expectedFingerprint', 'mode']);
+  const allowedFields = new Set(['type', 'host', 'port', 'username', 'authMethod', 'password', 'privateKey', 'keychainId', 'keyPassphrase', 'cols', 'rows', 'term', 'expectedFingerprint', 'mode', 'command', 'timeoutMs']);
   if (Object.keys(raw).some((field) => !allowedFields.has(field))) throw new Error('Unsupported connection field');
-  if (raw.mode !== undefined && raw.mode !== 'forward') throw new Error('Invalid connection mode');
+  if (raw.mode !== undefined && (typeof raw.mode !== 'string' || !['forward', 'exec', 'sftp'].includes(raw.mode))) throw new Error('Invalid connection mode');
+  if (raw.mode === 'exec' ? typeof raw.command !== 'string' || !raw.command.length || raw.command.length > 32 * 1024 || raw.command.includes('\0') : raw.command !== undefined) throw new Error('Invalid exec command');
+  const maxTimeoutMs = raw.mode === 'sftp' ? 86_400_000 : 600_000;
+  if (raw.timeoutMs !== undefined && (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 1000 || raw.timeoutMs > maxTimeoutMs)) throw new Error('Invalid session timeout');
   const size = normalizeTerminalSize(raw.cols ?? 120, raw.rows ?? 40);
   if (!size) throw new Error('Invalid terminal size');
 
@@ -140,8 +146,12 @@ export function parseConnectMessage(value: unknown): SSHConnectionConfig {
   const keychainId = raw.keychainId;
   if (keychainId !== undefined && (typeof keychainId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(keychainId)
     || raw.authMethod !== 'publickey' || raw.privateKey !== undefined || raw.password !== undefined)) throw new Error('Invalid keychain reference');
+  const keyPassphrase = typeof raw.keyPassphrase === 'string' ? raw.keyPassphrase : undefined;
+  if (keyPassphrase !== undefined && (keyPassphrase.length < 1 || keyPassphrase.length > 1024)) throw new Error('Invalid private key passphrase');
   if (raw.authMethod === 'password' && (password === undefined || password.length > 4096 || privateKey !== undefined)) throw new Error('Password is required and must be the only credential');
-  if (raw.authMethod === 'publickey' && !keychainId && (!privateKey || privateKey.length > 128 * 1024 || !privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || password !== undefined)) throw new Error('An unencrypted OpenSSH private key is required and must be the only credential');
+  if (raw.authMethod === 'publickey' && !keychainId && (!privateKey || privateKey.length > 128 * 1024 || !privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || password !== undefined)) throw new Error('An OpenSSH private key is required and must be the only credential');
+  // 口令只有配上私钥（直传或密钥链引用）才有意义
+  if (keyPassphrase !== undefined && raw.authMethod !== 'publickey') throw new Error('A private key passphrase requires public-key authentication');
   if (raw.expectedFingerprint !== undefined && (typeof raw.expectedFingerprint !== 'string' || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(raw.expectedFingerprint))) throw new Error('Invalid host key fingerprint');
   const term = typeof raw.term === 'string' && /^[A-Za-z0-9._+-]{1,64}$/.test(raw.term) ? raw.term : 'xterm-256color';
 
@@ -149,7 +159,11 @@ export function parseConnectMessage(value: unknown): SSHConnectionConfig {
     type: 'connect', host: raw.host.trim().replace(/^\[|\]$/g, ''), port: raw.port,
     username: raw.username, authMethod: raw.authMethod, password, privateKey,
     ...(keychainId ? { keychainId: keychainId as string } : {}),
+    ...(keyPassphrase !== undefined ? { keyPassphrase } : {}),
     cols: size.cols, rows: size.rows, term, expectedFingerprint: raw.expectedFingerprint as string | undefined,
-    ...(raw.mode === 'forward' ? { mode: 'forward' as const } : {}),
+    ...(raw.mode ? { mode: raw.mode as SSHConnectionConfig['mode'] } : {}),
+    ...(raw.mode === 'exec' ? { command: raw.command as string } : {}),
+    ...(raw.timeoutMs !== undefined || raw.mode === 'exec' || raw.mode === 'sftp'
+      ? { timeoutMs: (raw.timeoutMs as number | undefined) ?? (raw.mode === 'exec' ? 60_000 : 600_000) } : {}),
   };
 }
